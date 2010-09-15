@@ -1,0 +1,121 @@
+#!/usr/bin/env ruby
+
+class DiceRollFormatException < Exception
+end
+class DiceRoll
+  attr_reader :num_of_dices, :num_of_faces, :modifier
+  def initialize(dice_string)
+    @num_of_dices, @num_of_faces, @modifier = case dice_string
+                                              when /(\d+)[dD](\d+)([-+]\d+)?/
+                                                [$1.to_i, $2.to_i, $3.to_i]
+                                              when /[dD](\d+)([-+]\d+)?/
+                                                [1, $1.to_i, $2.to_i]
+                                              else
+                                                raise DiceRollFormatException.new("Wrong dice format: [#{dice_string}], required AdX+M")
+                                              end
+  end
+
+  def to_s
+    "#{@num_of_dices}d#{@num_of_faces}#{@modifier >= 0 ? "+" : ""}#{@modifier}"
+  end
+end
+
+require "pp"
+
+class DiceProbability
+  attr_reader :min, :max, :average, :values, :p_values
+  def initialize(dice_roll)
+    @min = dice_roll.num_of_dices + dice_roll.modifier
+    @max = dice_roll.num_of_dices * dice_roll.num_of_faces + dice_roll.modifier
+    @average = (@min + @max) / 2.0
+
+    dice_faces = 1.upto(dice_roll.num_of_faces)
+
+    histogram = 1.upto(dice_roll.num_of_dices).reduce({}) do |acc,el|
+      old_histogram = acc
+      new_histogram = {}
+      if old_histogram.empty?
+        new_histogram = dice_faces.reduce({}) { |h,f| h[f] = 1; h }
+      else
+        dice_faces.each do |face|
+          old_histogram.keys.each do |k|
+            new_histogram[k + face] ||= 0
+            new_histogram[k + face] += old_histogram[k]
+          end
+        end
+      end
+      new_histogram
+    end
+    num_of_rolls = dice_roll.num_of_faces ** dice_roll.num_of_dices
+
+    @values = histogram.keys.sort
+    @p_values = @values.reduce([{}, 0.0]) do |acc,v|
+      p_mass = histogram[v].to_f / num_of_rolls
+      p_cumulative_distribution = acc[1] + p_mass
+      acc[0][v] = {
+        :count => histogram[v],
+        :p_mass => p_mass,
+        :p_cumulative_distribution => p_cumulative_distribution
+      }
+      acc[1] = p_cumulative_distribution
+      acc
+    end[0]
+  end
+end
+
+class Grapher
+  def self.graph(p, add_header = true)
+    pcf_len = 40
+    pmf_len = 40
+    h = ["#", "cnt", "cumulative distribution", "probability mass"]
+    ls = [
+      [h[0].length, *p.values.map{|v| v.to_s.length}].max,
+      [h[1].length, *p.p_values.map{|k,v| v[:count].to_s.length}].max,
+      [h[2].length, *p.p_values.map{|k,v| v[:p_mass].to_s.length}].max,
+      [h[3].length, *p.p_values.map{|k,v| v[:p_cumulative_distribution].to_s.length}].max
+    ]
+    header = "| %*s | %*s | %*s | %-*s |\n" % [
+      ls[0],   h[0],
+      ls[1],   h[1],
+      pcf_len, h[2],
+      pmf_len, h[3]
+    ] + "+=%s=+=%s=+=%s=+=%s=+\n" % [
+      "=" * ls[0],
+      "=" * ls[1],
+      "=" * pcf_len,
+      "=" * pmf_len
+    ]
+    table = p.values.map do |v|
+      "| %*d | %-*d | %*s | %-*s |" % [
+        ls[0],   v,
+        ls[1],   p.p_values[v][:count],
+        pcf_len, "#" * (pcf_len * p.p_values[v][:p_cumulative_distribution]),
+        pmf_len, "#" * (pmf_len * p.p_values[v][:p_mass])
+      ]
+    end.join "\n"
+
+    if add_header
+      header + table
+    else
+      table
+    end
+  end
+end
+
+ARGV.each do |dice_string|
+  begin
+    puts dice_string
+
+    dice_roll = DiceRoll.new(dice_string)
+    dice_p = DiceProbability.new(dice_roll)
+    graph = Grapher.graph(dice_p)
+
+    puts dice_roll
+    puts "  min: #{dice_p.min}, max: #{dice_p.max}, avg: #{dice_p.average}"
+    puts graph
+    puts
+  rescue DiceRollFormatException => e
+    puts e.message
+    puts
+  end
+end
